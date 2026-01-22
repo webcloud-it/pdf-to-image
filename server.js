@@ -5,6 +5,7 @@ import path from 'node:path'
 import os from 'node:os'
 import {execFile} from 'node:child_process'
 import {promisify} from 'node:util'
+import cors from 'cors'
 
 const execFileAsync = promisify(execFile)
 const upload = multer({
@@ -13,9 +14,14 @@ const upload = multer({
 })
 
 const app = express()
+app.use(cors())
 
 app.get('/health', (req, res) => {
   res.json({ok: true})
+})
+
+app.get('/', (req, res) => {
+  res.status(200).send('OK. Usa POST /pdf-to-image con field multipart "file" (PDF).')
 })
 
 app.post('/pdf-to-image', upload.single('file'), async (req, res) => {
