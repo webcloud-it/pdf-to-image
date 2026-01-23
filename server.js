@@ -52,39 +52,54 @@ function listPages(tmpDir) {
   }))
 }
 
-/**
- * ✅ MULTIPART/MIXED: una parte per pagina
- * - query param: ?dpi=200 (default 200)
- */
 app.post('/pdf-to-image', upload.single('file'), async (req, res) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-'))
+  const boundary = 'pdf2img-' + crypto.randomBytes(12).toString('hex')
 
   try {
     const f = req.file
     if (!f) return res.status(400).json({error: 'Nessun file'})
-    if (f.mimetype !== 'application/pdf') return res.status(415).json({error: 'Solo PDF'})
 
-    const dpi = Math.max(72, Math.min(600, Number(req.query.dpi || 200))) // clamp 72..600
+    res.status(200)
+    res.setHeader('Content-Type', `multipart/mixed; boundary=${boundary}`)
+    res.setHeader('Cache-Control', 'no-store')
+
+    const isPdf =
+      f.mimetype === 'application/pdf' || (f.originalname || '').toLowerCase().endsWith('.pdf')
+
+    // ✅ Se NON è PDF: restituisco comunque 1 parte (come "multi-file" coerente)
+    if (!isPdf) {
+      // se arriva un'immagine, la trattiamo come "pagina 1"
+      const filename = (f.originalname || 'image').replace(/[^\w.\-]+/g, '_')
+      res.write(`--${boundary}\r\n`)
+      res.write(`Content-Type: ${f.mimetype || 'application/octet-stream'}\r\n`)
+      res.write(`Content-Disposition: attachment; filename="${filename}"\r\n`)
+      res.write(`X-Page-Number: 1\r\n`)
+      res.write(`Content-Length: ${f.buffer.length}\r\n`)
+      res.write(`\r\n`)
+      res.write(f.buffer)
+      res.write(`\r\n`)
+      return res.end(`--${boundary}--\r\n`)
+    }
+
+    // ✅ PDF → converto tutte le pagine e ritorno N parti PNG
+    const dpi = Math.max(72, Math.min(600, Number(req.query.dpi || 200)))
 
     const pdfPath = path.join(tmpDir, 'input.pdf')
     fs.writeFileSync(pdfPath, f.buffer)
 
     const outPrefix = path.join(tmpDir, 'page')
-
-    // ✅ MULTI-PAGINA: niente -f/-l => tutte le pagine
     await execFileAsync('pdftoppm', ['-png', '-r', String(dpi), pdfPath, outPrefix])
 
     const pages = listPages(tmpDir)
-    if (!pages.length)
-      return res.status(500).json({error: 'Conversione fallita (nessuna pagina prodotta)'})
+    if (!pages.length) {
+      res.write(`--${boundary}\r\n`)
+      res.write(`Content-Type: application/json\r\n\r\n`)
+      res.write(JSON.stringify({error: 'Conversione fallita (nessuna pagina prodotta)'}))
+      res.write(`\r\n`)
+      return res.end(`--${boundary}--\r\n`)
+    }
 
-    // ✅ response multipart/mixed
-    const boundary = 'pdf2img-' + crypto.randomBytes(12).toString('hex')
-    res.status(200)
-    res.setHeader('Content-Type', `multipart/mixed; boundary=${boundary}`)
-    res.setHeader('Cache-Control', 'no-store')
-
-    // Scrive ogni parte come "file" separato
     for (const p of pages) {
       const buf = fs.readFileSync(p.fullpath)
       res.write(`--${boundary}\r\n`)
@@ -99,9 +114,15 @@ app.post('/pdf-to-image', upload.single('file'), async (req, res) => {
 
     res.end(`--${boundary}--\r\n`)
   } catch (e) {
-    res.status(500).json({error: 'Errore conversione'})
+    // ⚠️ non posso più fare res.status(500) dopo che ho iniziato a streammare
+    try {
+      res.write(`--${boundary}\r\n`)
+      res.write(`Content-Type: application/json\r\n\r\n`)
+      res.write(JSON.stringify({error: 'Errore conversione'}))
+      res.write(`\r\n`)
+      res.end(`--${boundary}--\r\n`)
+    } catch {}
   } finally {
-    // cleanup best-effort
     try {
       fs.rmSync(tmpDir, {recursive: true, force: true})
     } catch {}
