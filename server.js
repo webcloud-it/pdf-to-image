@@ -56,7 +56,7 @@ function listPages(tmpDir) {
  * ✅ MULTIPART/MIXED: una parte per pagina
  * - query param: ?dpi=200 (default 200)
  */
-app.post('/pdf-to-images', upload.single('file'), async (req, res) => {
+app.post('/pdf-to-image', upload.single('file'), async (req, res) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-'))
 
   try {
