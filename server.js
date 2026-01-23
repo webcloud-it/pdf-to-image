@@ -15,7 +15,7 @@ const upload = multer({
 
 const app = express()
 
-// ✅ CORS hard (per evitare che proxy/streaming “perdano” gli header)
+// ✅ CORS hard (per streaming + browser)
 app.use((req, res, next) => {
   const origin = req.headers.origin || '*'
   res.setHeader('Access-Control-Allow-Origin', origin)
@@ -27,7 +27,9 @@ app.use((req, res, next) => {
   next()
 })
 
-app.get('/health', (req, res) => res.json({ok: true}))
+app.get('/health', (req, res) => {
+  res.json({ok: true})
+})
 
 app.get('/', (req, res) => {
   res.status(200).send('OK. Usa POST /pdf-to-image con field multipart "file" (PDF).')
@@ -37,29 +39,39 @@ app.post('/pdf-to-image', upload.single('file'), async (req, res) => {
   try {
     const f = req.file
     if (!f) return res.status(400).json({error: 'Nessun file'})
-    if (f.mimetype !== 'application/pdf') return res.status(415).json({error: 'Solo PDF'})
+    if (f.mimetype !== 'application/pdf') {
+      return res.status(415).json({error: 'Solo PDF'})
+    }
 
+    // 📁 temp dir
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-'))
     const pdfPath = path.join(tmpDir, 'input.pdf')
     fs.writeFileSync(pdfPath, f.buffer)
 
     const outPrefix = path.join(tmpDir, 'page')
 
-    await execFileAsync('pdftoppm', ['-png', '-r', '150', '-f', '1', '-l', '1', pdfPath, outPrefix])
+    // ✅ UNICA MODIFICA CHIAVE:
+    // DPI aumentati da 150 → 200 per migliorare la resa
+    await execFileAsync('pdftoppm', ['-png', '-r', '200', '-f', '1', '-l', '1', pdfPath, outPrefix])
 
     const outFile = path.join(tmpDir, 'page-1.png')
-    if (!fs.existsSync(outFile)) return res.status(500).json({error: 'Conversione fallita'})
+    if (!fs.existsSync(outFile)) {
+      return res.status(500).json({error: 'Conversione fallita'})
+    }
 
-    // ✅ qui settiamo esplicitamente gli header (prima dello stream)
+    // ✅ header espliciti prima dello stream
     res.status(200)
     res.setHeader('Content-Type', 'image/png')
     res.setHeader('Cache-Control', 'no-store')
 
     fs.createReadStream(outFile).pipe(res)
   } catch (e) {
+    console.error('pdf-to-image error:', e)
     res.status(500).json({error: 'Errore conversione'})
   }
 })
 
 const PORT = process.env.PORT || 3000
-app.listen(PORT, () => console.log(`pdf-to-image listening on ${PORT}`))
+app.listen(PORT, () => {
+  console.log(`pdf-to-image listening on ${PORT}`)
+})
